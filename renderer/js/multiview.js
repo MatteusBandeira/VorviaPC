@@ -1,11 +1,13 @@
-// Modulo Multitela Pro v1.2.3 (ate 6 telas simultaneas em grade 3x2)
-// Mixer unico via Web Audio API (AudioContext + GainNode):
-// Todas as 6 telas compartilham 1 unica saida de audio no Windows/Electron,
-// evitando que o som trave ou suma ao adicionar um segundo canal ou trocar de janela.
+// Modulo Multitela Pro v1.2.4 (ate 6 telas simultaneas em grade 3x2)
+// Audio nativo instantaneo (sem Web Audio API / AudioContext):
+// Remove o atraso de ~1 minuto do createMediaElementSource com streams MSE/HLS no Electron,
+// mantendo o decoder de audio sempre quente via volume inaudivel (0.0005) nas telas inativas.
 
 window.VorviaMultiview = (function () {
   const PRESETS_KEY = 'vorvia_pc_multiview_presets_v1';
   const MAX_SLOTS = 6;
+  // Volume inaudivel (-66 dB): silencioso na pratica, mas evita que o Chromium suspenda o decoder de audio
+  const SILENT_VOLUME = 0.0005;
 
   let activeCount = 6;
   let activeAudioSlot = 0;
@@ -14,70 +16,14 @@ window.VorviaMultiview = (function () {
   let onRequestChannelPicker = null;
   let containerEl = null;
 
-  // Contexto unico de audio para todas as 6 janelas
-  let audioCtx = null;
-  let audioUnlockBound = false;
-
-  function ensureAudioContext() {
-    if (!audioCtx) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (Ctx) {
-        try {
-          audioCtx = new Ctx({ latencyHint: 'playback' });
-        } catch (_) {
-          audioCtx = null;
-        }
-      }
-    }
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume().catch(() => {});
-    }
-    return audioCtx;
-  }
-
-  function bindGlobalAudioUnlock() {
-    if (audioUnlockBound) return;
-    audioUnlockBound = true;
-    const unlock = () => {
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
-    };
-    document.addEventListener('pointerdown', unlock, { passive: true });
-    document.addEventListener('keydown', unlock, { passive: true });
-  }
-
-  function attachSlotAudioGraph(slot) {
-    if (!slot || !slot.videoEl || slot.audioAttached) return;
-    const ctx = ensureAudioContext();
-    if (!ctx) return;
-
-    try {
-      const source = ctx.createMediaElementSource(slot.videoEl);
-      const gainNode = ctx.createGain();
-      gainNode.gain.value = 0;
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      slot.audioSource = source;
-      slot.gainNode = gainNode;
-      slot.audioAttached = true;
-    } catch (_) {
-      // Fallback para controle direto no elemento <video> caso Web Audio falhe
-      slot.audioAttached = false;
-    }
-  }
-
   function init(container, pickerCallback) {
     containerEl = container;
     onRequestChannelPicker = pickerCallback;
-    bindGlobalAudioUnlock();
 
     // Marca visual da versao para confirmar que o build atualizado esta ativo
     const mvHeading = document.querySelector('#view-multiview .mv-toolbar h2');
-    if (mvHeading && !mvHeading.dataset.verTagged) {
-      mvHeading.dataset.verTagged = '1';
-      mvHeading.innerHTML = 'Multitela <span class="accent">Pro</span> <small style="font-size:11px;color:#8E9CB8;font-weight:600">v1.2.3</small>';
+    if (mvHeading) {
+      mvHeading.innerHTML = 'Multitela <span class="accent">Pro</span> <small style="font-size:11px;color:#8E9CB8;font-weight:600">v1.2.4</small>';
     }
 
     for (let i = 0; i < MAX_SLOTS; i++) {
@@ -88,10 +34,7 @@ window.VorviaMultiview = (function () {
         videoEl: null,
         statusEl: null,
         titleEl: null,
-        volume: 0.85,
-        audioAttached: false,
-        audioSource: null,
-        gainNode: null
+        volume: 0.85
       });
     }
     renderGrid();
@@ -113,27 +56,16 @@ window.VorviaMultiview = (function () {
     if (!slot || !slot.videoEl) return;
 
     const isFocused = !globalMuted && idx === activeAudioSlot && idx < activeCount;
-    const targetVol = isFocused ? Math.max(0.05, Math.min(1, Number(slot.volume) || 0.85)) : 0;
+    const targetVol = isFocused
+      ? Math.max(0.05, Math.min(1, Number(slot.volume) || 0.85))
+      : SILENT_VOLUME;
 
-    // Mantem o elemento <video> sempre desmutado para o Chromium nunca suspender o decoder MSE
+    // Audio direto no elemento <video> (sem Web Audio API e sem muted = true)
     slot.videoEl.defaultMuted = false;
     slot.videoEl.muted = false;
-
-    if (slot.audioAttached && slot.gainNode && audioCtx) {
-      slot.videoEl.volume = 1;
-      try {
-        const now = audioCtx.currentTime;
-        slot.gainNode.gain.cancelScheduledValues(now);
-        slot.gainNode.gain.setTargetAtTime(targetVol, now, 0.015);
-      } catch (_) {
-        slot.gainNode.gain.value = targetVol;
-      }
-    } else {
-      // Fallback caso o AudioContext ainda nao esteja inicializado
-      try {
-        slot.videoEl.volume = isFocused ? targetVol : 0.00005;
-      } catch (_) {}
-    }
+    try {
+      slot.videoEl.volume = targetVol;
+    } catch (_) {}
 
     const cell = containerEl?.querySelector(`.mv-cell[data-slot="${idx}"]`);
     if (cell) {
@@ -191,33 +123,15 @@ window.VorviaMultiview = (function () {
       const statusEl = cell.querySelector('.mv-status');
       const titleEl = cell.querySelector('.mv-ch-title');
 
-      // Desconecta grafo anterior ao recriar o elemento <video>
-      if (slot.audioSource) {
-        try { slot.audioSource.disconnect(); } catch (_) {}
-      }
-      if (slot.gainNode) {
-        try { slot.gainNode.disconnect(); } catch (_) {}
-      }
-      slot.audioAttached = false;
-      slot.audioSource = null;
-      slot.gainNode = null;
-
       videoEl.defaultMuted = false;
       videoEl.muted = false;
-      videoEl.volume = 1;
+      videoEl.volume = isFocused ? slot.volume : SILENT_VOLUME;
 
       slot.videoEl = videoEl;
       slot.statusEl = statusEl;
       slot.titleEl = titleEl;
 
-      // Conecta esta tela ao mixer unico do AudioContext
-      attachSlotAudioGraph(slot);
-
-      const enforceAudio = () => {
-        ensureAudioContext();
-        attachSlotAudioGraph(slot);
-        applySlotAudio(i);
-      };
+      const enforceAudio = () => applySlotAudio(i);
       videoEl.addEventListener('loadedmetadata', enforceAudio);
       videoEl.addEventListener('canplay', enforceAudio);
       videoEl.addEventListener('playing', enforceAudio);
@@ -227,23 +141,20 @@ window.VorviaMultiview = (function () {
         onStatus: (state, msg) => {
           statusEl.textContent = msg;
           statusEl.className = `mv-status st-${state}`;
-          if (state === 'playing') enforceAudio();
+          if (state === 'playing') applySlotAudio(i);
         }
       });
 
       cell.querySelector('.mv-pick-btn').onclick = (e) => {
         e.stopPropagation();
-        ensureAudioContext();
         if (onRequestChannelPicker) onRequestChannelPicker(i);
       };
       cell.querySelector('.mv-change-btn').onclick = (e) => {
         e.stopPropagation();
-        ensureAudioContext();
         if (onRequestChannelPicker) onRequestChannelPicker(i);
       };
       cell.querySelector('.mv-audio-btn').onclick = (e) => {
         e.stopPropagation();
-        ensureAudioContext();
         if (i === activeAudioSlot && !globalMuted) {
           globalMuted = true;
           syncAudioFocus();
@@ -256,7 +167,6 @@ window.VorviaMultiview = (function () {
       volSlider.onclick = (e) => e.stopPropagation();
       volSlider.oninput = (e) => {
         e.stopPropagation();
-        ensureAudioContext();
         slot.volume = Math.max(0.05, Number(e.target.value));
         activeAudioSlot = i;
         globalMuted = false;
@@ -265,7 +175,6 @@ window.VorviaMultiview = (function () {
 
       cell.querySelector('.mv-reload-btn').onclick = (e) => {
         e.stopPropagation();
-        ensureAudioContext();
         slot.engine?.reload();
       };
       cell.querySelector('.mv-fs-btn').onclick = (e) => {
@@ -279,7 +188,6 @@ window.VorviaMultiview = (function () {
       };
 
       cell.onclick = () => {
-        ensureAudioContext();
         if (slot.channel) focusAudio(i);
         else if (onRequestChannelPicker) onRequestChannelPicker(i);
       };
@@ -301,11 +209,8 @@ window.VorviaMultiview = (function () {
 
   function assignChannel(slotIndex, channel) {
     if (slotIndex < 0 || slotIndex >= MAX_SLOTS || !channel) return;
-    ensureAudioContext();
     const slot = slots[slotIndex];
     slot.channel = channel;
-
-    attachSlotAudioGraph(slot);
 
     if (!slots[activeAudioSlot] || !slots[activeAudioSlot].channel) {
       activeAudioSlot = slotIndex;
@@ -355,7 +260,6 @@ window.VorviaMultiview = (function () {
   }
 
   function resumeAll() {
-    ensureAudioContext();
     slots.forEach((s, idx) => {
       if (idx < activeCount && s.channel && s.engine) {
         if (!s.engine.hls && !s.engine.tsPlayer && (!s.videoEl || !s.videoEl.src)) {
@@ -375,12 +279,10 @@ window.VorviaMultiview = (function () {
 
   function focusAudio(slotIndex) {
     if (slotIndex < 0 || slotIndex >= activeCount) return;
-    ensureAudioContext();
     activeAudioSlot = slotIndex;
     globalMuted = false;
     const target = slots[slotIndex];
     if (target && target.volume < 0.1) target.volume = 0.85;
-    if (target) attachSlotAudioGraph(target);
     syncAudioFocus();
     if (target?.videoEl && target.channel && target.videoEl.paused) {
       target.videoEl.play().catch(() => {});
@@ -389,7 +291,6 @@ window.VorviaMultiview = (function () {
 
   function syncAudioFocus() {
     if (!containerEl) return;
-    ensureAudioContext();
     for (let i = 0; i < MAX_SLOTS; i++) {
       applySlotAudio(i);
     }
@@ -412,7 +313,6 @@ window.VorviaMultiview = (function () {
   }
 
   function applyPreset(presetId) {
-    ensureAudioContext();
     const preset = loadPresets().find((p) => p.id === presetId);
     if (!preset) return;
     setLayout(preset.count || 6);
