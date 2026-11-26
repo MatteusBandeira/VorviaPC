@@ -1,0 +1,53 @@
+name: Gerar Vorvia PC (.exe)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Baixar codigo do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Localizar pasta do projeto e compilar
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem -Path . -Filter package.json -Recurse -Depth 3 | Select-Object -First 1
+          if (-not $pkg) { throw "package.json nao encontrado no repositorio!" }
+          $dir = $pkg.Directory.FullName
+          Write-Host "Compilando projeto em: $dir"
+          Set-Location $dir
+          npm install
+          npm run build
+          $outDir = Join-Path $env:GITHUB_WORKSPACE "dist_out"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          Copy-Item -Path (Join-Path $dir "dist\*.exe") -Destination $outDir -Force
+
+      - name: Disponibilizar arquivos na aba Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vorvia-PC-Executaveis
+          path: dist_out/*.exe
+
+      - name: Publicar Release com link direto para clientes
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.2.0
+          name: Vorvia PC v1.2.0
+          body: |
+            ## Vorvia PC v1.2.0 (Windows 64-bit)
+            - **Vorvia-PC-Portatil.exe**: Arquivo unico — basta baixar e abrir, sem instalar nada.
+            - **Vorvia-PC-Instalador.exe**: Instalador tradicional que cria atalho na Area de Trabalho.
+          files: dist_out/*.exe
