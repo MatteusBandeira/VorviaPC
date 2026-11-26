@@ -1,0 +1,65 @@
+{
+  "name": "vorvia-pc",
+  "version": "1.2.0",
+  "description": "Vorvia PC - Reprodutor de Midia com Multitela 6 Telas e Sinopses PT-BR",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --publish never"
+  },
+  "dependencies": {
+    "hls.js": "^1.5.17",
+    "mpegts.js": "^1.7.3"
+  },
+  "devDependencies": {
+    "electron": "^32.2.5",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.vorvia.pc",
+    "productName": "Vorvia PC",
+    "directories": {
+      "output": "dist"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "assets/icon.ico"
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "node_modules/hls.js/dist/hls.min.js",
+      "node_modules/mpegts.js/dist/mpegts.js"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Vorvia-PC-Portatil.exe"
+    },
+    "nsis": {
+      "artifactName": "Vorvia-PC-Instalador.exe",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Vorvia PC"
+    }
+  }
+}

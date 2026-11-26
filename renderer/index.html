@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vorvia PC</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Barra de titulo customizada -->
+  <header class="titlebar">
+    <div class="tb-brand">
+      <img src="../assets/icon.svg" alt="Vorvia" class="tb-logo" />
+      <span class="tb-name">VORVIA <span class="accent">PC</span></span>
+      <span id="activeProfileBadge" class="profile-badge hidden"></span>
+    </div>
+    <div class="tb-center">
+      <div class="global-search-box">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="globalSearchInput" placeholder="Buscar filmes, séries ou canais (Ctrl+K)..." />
+      </div>
+    </div>
+    <div class="tb-controls">
+      <span id="netIndicator" class="net-pill online">● Online</span>
+      <button class="tb-btn" id="btnFullscreen" title="Tela Cheia (F11)">⛶</button>
+      <button class="tb-btn" id="btnMin" title="Minimizar">—</button>
+      <button class="tb-btn" id="btnMax" title="Maximizar">□</button>
+      <button class="tb-btn tb-close" id="btnClose" title="Fechar">✕</button>
+    </div>
+  </header>
+
+  <!-- Alerta de queda de conexao -->
+  <div id="offlineBanner" class="offline-banner hidden">
+    <span>⚠ Sem conexão com a internet — tentando reconectar automaticamente...</span>
+  </div>
+
+  <!-- Tela de Login / Gerenciador de Listas -->
+  <section id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="login-header">
+        <img src="../assets/icon.svg" alt="Vorvia" class="login-logo" />
+        <div>
+          <h1>Vorvia <span class="accent">PC</span></h1>
+          <p>Player de alta performance • Multitela 6 Telas • Sinopses PT-BR</p>
+        </div>
+      </div>
+
+      <div id="savedProfilesWrap" class="saved-profiles hidden">
+        <h3>Listas Salvas</h3>
+        <div id="savedProfilesList" class="profiles-grid"></div>
+      </div>
+
+      <div class="login-tabs">
+        <button class="tab-btn active" data-tab="xtream">Xtream API (Servidor / Usuário / Senha)</button>
+        <button class="tab-btn" data-tab="m3u">Lista M3U (URL)</button>
+      </div>
+
+      <form id="xtreamForm" class="login-form">
+        <div class="form-row">
+          <label>Nome do Perfil</label>
+          <input type="text" id="xtName" placeholder="Ex: Minha Lista Principal" required />
+        </div>
+        <div class="form-row">
+          <label>URL do Servidor</label>
+          <input type="url" id="xtServer" placeholder="http://servidor.exemplo:8080" required />
+        </div>
+        <div class="form-grid-2">
+          <div class="form-row">
+            <label>Usuário</label>
+            <input type="text" id="xtUser" placeholder="usuario" required />
+          </div>
+          <div class="form-row">
+            <label>Senha</label>
+            <input type="password" id="xtPass" placeholder="••••••••" required />
+          </div>
+        </div>
+        <button type="submit" class="btn-primary btn-lg">Conectar e Carregar Catálogo</button>
+      </form>
+
+      <form id="m3uForm" class="login-form hidden">
+        <div class="form-row">
+          <label>Nome do Perfil</label>
+          <input type="text" id="m3uName" placeholder="Ex: Lista M3U" required />
+        </div>
+        <div class="form-row">
+          <label>Link da Lista M3U</label>
+          <input type="url" id="m3uUrl" placeholder="http://servidor.exemplo/get.php?..." required />
+        </div>
+        <button type="submit" class="btn-primary btn-lg">Carregar Lista M3U</button>
+      </form>
+
+      <div id="loginStatus" class="login-status"></div>
+    </div>
+  </section>
+
+  <!-- Aplicacao Principal -->
+  <div id="appShell" class="app-shell hidden">
+    <aside class="sidebar">
+      <nav class="nav-list">
+        <button class="nav-btn active" data-view="home"><span>⌂</span> Início</button>
+        <button class="nav-btn" data-view="live"><span>◉</span> TV ao Vivo</button>
+        <button class="nav-btn" data-view="movies"><span>🎬</span> Filmes</button>
+        <button class="nav-btn" data-view="series"><span>▤</span> Séries</button>
+        <button class="nav-btn highlight-nav" data-view="multiview"><span>⊞</span> Multitela <small>6x</small></button>
+        <button class="nav-btn" data-view="favorites"><span>★</span> Favoritos</button>
+        <button class="nav-btn" data-view="search"><span>⌕</span> Busca Global</button>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="nav-btn" data-view="settings"><span>⚙</span> Configurações</button>
+        <button class="nav-btn danger-nav" id="btnSwitchAccount"><span>⇄</span> Trocar Lista</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <!-- HOME -->
+      <section id="view-home" class="view active">
+        <div class="home-hero">
+          <div>
+            <h2>Bem-vindo ao Vorvia <span class="accent">PC</span></h2>
+            <p id="accountSummary">Catálogo carregado com aceleração por GPU.</p>
+          </div>
+          <div class="home-stats">
+            <div class="stat-card"><strong id="statLive">0</strong><span>Canais</span></div>
+            <div class="stat-card"><strong id="statMovies">0</strong><span>Filmes</span></div>
+            <div class="stat-card"><strong id="statSeries">0</strong><span>Séries</span></div>
+          </div>
+        </div>
+
+        <div class="section-block" id="continueBlock">
+          <div class="section-head">
+            <h3>Continuar Assistindo</h3>
+            <button class="btn-ghost btn-sm" id="btnClearContinue">Limpar histórico</button>
+          </div>
+          <div id="continueGrid" class="cards-row"></div>
+        </div>
+
+        <div class="section-block">
+          <div class="section-head">
+            <h3>Adicionados Recentemente — Filmes</h3>
+            <button class="btn-ghost btn-sm" data-jump="movies">Ver todos →</button>
+          </div>
+          <div id="recentMoviesGrid" class="cards-grid"></div>
+        </div>
+
+        <div class="section-block">
+          <div class="section-head">
+            <h3>Adicionados Recentemente — Séries</h3>
+            <button class="btn-ghost btn-sm" data-jump="series">Ver todas →</button>
+          </div>
+          <div id="recentSeriesGrid" class="cards-grid"></div>
+        </div>
+      </section>
+
+      <!-- TV AO VIVO -->
+      <section id="view-live" class="view">
+        <div class="live-layout">
+          <div class="cat-column">
+            <input type="text" id="liveCatFilter" class="filter-input" placeholder="Filtrar categoria..." />
+            <div id="liveCategories" class="cat-list"></div>
+          </div>
+          <div class="ch-column">
+            <input type="text" id="liveChFilter" class="filter-input" placeholder="Filtrar canal..." />
+            <div id="liveChannelList" class="ch-list"></div>
+          </div>
+          <div class="preview-column">
+            <div class="preview-box">
+              <video id="livePreviewVideo" playsinline controls></video>
+              <div id="livePreviewStatus" class="preview-status">Selecione um canal para pré-visualizar</div>
+            </div>
+            <div class="preview-meta">
+              <div>
+                <h3 id="livePreviewTitle">Nenhum canal selecionado</h3>
+                <p id="livePreviewCat" class="muted-hint">—</p>
+              </div>
+              <div class="preview-actions">
+                <button id="btnLiveFav" class="btn-ghost">★ Favoritar</button>
+                <button id="btnLiveToMulti" class="btn-ghost">⊞ Enviar p/ Multitela</button>
+                <button id="btnLiveFullscreen" class="btn-primary">▶ Assistir em Tela Cheia</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FILMES -->
+      <section id="view-movies" class="view">
+        <div class="catalog-layout">
+          <div class="cat-column">
+            <input type="text" id="movieCatFilter" class="filter-input" placeholder="Categorias..." />
+            <div id="movieCategories" class="cat-list"></div>
+          </div>
+          <div class="catalog-main">
+            <div class="catalog-toolbar">
+              <h2 id="movieCatTitle">Todos os Filmes</h2>
+              <input type="text" id="movieSearchInput" class="filter-input toolbar-search" placeholder="Filtrar filmes nesta categoria..." />
+            </div>
+            <div id="moviesGrid" class="cards-grid"></div>
+            <div class="load-more-wrap">
+              <button id="btnMoreMovies" class="btn-ghost hidden">Carregar mais filmes</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SERIES -->
+      <section id="view-series" class="view">
+        <div class="catalog-layout">
+          <div class="cat-column">
+            <input type="text" id="seriesCatFilter" class="filter-input" placeholder="Categorias..." />
+            <div id="seriesCategories" class="cat-list"></div>
+          </div>
+          <div class="catalog-main">
+            <div class="catalog-toolbar">
+              <h2 id="seriesCatTitle">Todas as Séries</h2>
+              <input type="text" id="seriesSearchInput" class="filter-input toolbar-search" placeholder="Filtrar séries nesta categoria..." />
+            </div>
+            <div id="seriesGrid" class="cards-grid"></div>
+            <div class="load-more-wrap">
+              <button id="btnMoreSeries" class="btn-ghost hidden">Carregar mais séries</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MULTITELA 6 TELAS -->
+      <section id="view-multiview" class="view">
+        <div class="mv-toolbar">
+          <div class="mv-toolbar-left">
+            <h2>Multitela <span class="accent">Pro</span></h2>
+            <div class="mv-layouts">
+              <button class="mv-layout-btn" data-count="1">1 Tela</button>
+              <button class="mv-layout-btn" data-count="2">2 Telas</button>
+              <button class="mv-layout-btn" data-count="3">3 Telas</button>
+              <button class="mv-layout-btn" data-count="4">4 Telas</button>
+              <button class="mv-layout-btn active" data-count="6">6 Telas (3x2)</button>
+            </div>
+          </div>
+          <div class="mv-toolbar-right">
+            <span class="kbd-hint">Teclas <b>1–6</b> trocam o áudio</span>
+            <button id="btnSavePreset" class="btn-primary btn-sm">💾 Salvar Preset</button>
+            <button id="btnClearMultiview" class="btn-ghost btn-sm">Limpar Tudo</button>
+          </div>
+        </div>
+        <div id="mvPresetsBar" class="mv-presets-bar"></div>
+        <div id="mvGridContainer" class="mv-grid mv-layout-6"></div>
+      </section>
+
+      <!-- FAVORITOS -->
+      <section id="view-favorites" class="view">
+        <div class="catalog-toolbar">
+          <h2>Meus Favoritos</h2>
+        </div>
+        <div id="favoritesGrid" class="cards-grid"></div>
+      </section>
+
+      <!-- BUSCA GLOBAL -->
+      <section id="view-search" class="view">
+        <div class="catalog-toolbar">
+          <h2 id="searchResultsHeading">Busca Global</h2>
+        </div>
+        <div id="searchResultsContainer"></div>
+      </section>
+
+      <!-- CONFIGURACOES -->
+      <section id="view-settings" class="view">
+        <div class="settings-wrap">
+          <h2>Configurações do Vorvia <span class="accent">PC</span></h2>
+
+          <div class="settings-card">
+            <h3>Sinopses Automáticas (TMDB PT-BR)</h3>
+            <p class="muted-hint">
+              Quando a lista vier sem sinopse, cortada ou em inglês, o Vorvia limpa o título automaticamente e busca sinopse completa em Português, elenco, diretor, nota, classificação, capa HD e trailer no TMDB.
+            </p>
+            <div class="form-inline">
+              <input type="text" id="tmdbKeyInput" placeholder="Cole sua API Key (v3) gratuita do TMDB..." />
+              <button id="btnSaveTmdb" class="btn-primary">Salvar Chave</button>
+              <button id="btnClearSynCache" class="btn-ghost">Limpar Cache</button>
+            </div>
+            <p class="muted-hint small">Chave gratuita em: <a href="#" id="linkTmdb">themoviedb.org/settings/api</a></p>
+          </div>
+
+          <div class="settings-card">
+            <h3>Controle de Segundo Plano</h3>
+            <label class="toggle-row">
+              <input type="checkbox" id="chkPauseOnMin" />
+              <span>Pausar vídeos automaticamente ao minimizar a janela (economiza GPU/banda)</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="chkMuteOnMin" />
+              <span>Apenas mutar áudio ao minimizar (mantém o vídeo rodando em segundo plano)</span>
+            </label>
+          </div>
+
+          <div class="settings-card">
+            <h3>Controle Parental (PIN)</h3>
+            <p class="muted-hint">Bloqueia categorias com conteúdo adulto (XXX, +18, Adulto) exigindo PIN de 4 dígitos.</p>
+            <div class="form-inline">
+              <label class="toggle-row">
+                <input type="checkbox" id="chkParental" />
+                <span>Ativar bloqueio parental</span>
+              </label>
+              <input type="password" id="parentalPinInput" maxlength="4" placeholder="PIN (ex: 0000)" style="width:140px" />
+              <button id="btnSaveParental" class="btn-primary">Salvar PIN</button>
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <h3>Teste de Velocidade de Internet</h3>
+            <p class="muted-hint">Recomendado: mínimo de 30 Mbps para rodar 6 telas simultâneas em HD sem engasgos.</p>
+            <div class="form-inline">
+              <button id="btnRunSpeed" class="btn-primary">⚡ Testar Conexão Agora</button>
+              <span id="speedResult" class="speed-result"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODAL DE DETALHES / SINOPSE TURBINADA (FILMES & SERIES) -->
+  <div id="detailsModal" class="modal hidden">
+    <div class="modal-backdrop" data-close="detailsModal"></div>
+    <div class="modal-panel details-panel">
+      <button class="modal-close" data-close="detailsModal">✕</button>
+      <div id="detailsBackdrop" class="details-backdrop"></div>
+      <div class="details-body">
+        <img id="detailsPoster" class="details-poster" alt="" />
+        <div class="details-info">
+          <div class="details-badges">
+            <span id="detailsSource" class="badge-cyan"></span>
+            <span id="detailsRating" class="badge-gold"></span>
+            <span id="detailsYear" class="badge-dark"></span>
+            <span id="detailsRuntime" class="badge-dark"></span>
+          </div>
+          <h2 id="detailsTitle"></h2>
+          <p id="detailsGenres" class="details-genres"></p>
+          <div class="synopsis-box">
+            <h4>Sinopse</h4>
+            <p id="detailsPlot">Carregando sinopse completa...</p>
+          </div>
+          <div class="credits-grid">
+            <div><strong>Direção:</strong> <span id="detailsDirector">—</span></div>
+            <div><strong>Elenco:</strong> <span id="detailsCast">—</span></div>
+          </div>
+          <div class="details-actions">
+            <button id="btnDetailsPlay" class="btn-primary btn-lg">▶ Assistir Agora</button>
+            <button id="btnDetailsFav" class="btn-ghost">★ Favoritar</button>
+            <button id="btnDetailsTrailer" class="btn-ghost hidden">▶ Ver Trailer</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Temporadas e Episodios (apenas para Series) -->
+      <div id="seriesEpisodesWrap" class="episodes-wrap hidden">
+        <div class="episodes-head">
+          <h3>Episódios</h3>
+          <select id="seasonSelect" class="season-select"></select>
+        </div>
+        <div id="episodesList" class="episodes-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL SELETOR DE CANAL PARA MULTITELA -->
+  <div id="pickerModal" class="modal hidden">
+    <div class="modal-backdrop" data-close="pickerModal"></div>
+    <div class="modal-panel picker-panel">
+      <div class="picker-head">
+        <h3 id="pickerTitle">Escolher Canal para a Tela</h3>
+        <button class="modal-close" data-close="pickerModal">✕</button>
+      </div>
+      <input type="text" id="pickerSearch" class="filter-input" placeholder="Buscar canal pelo nome ou categoria..." />
+      <div id="pickerList" class="picker-list"></div>
+    </div>
+  </div>
+
+  <!-- PLAYER TELA CHEIA (FILMES / SERIES / TV) -->
+  <div id="fullPlayer" class="full-player hidden">
+    <video id="mainVideo" playsinline></video>
+    <div class="fp-top">
+      <button id="fpBack" class="btn-ghost">← Voltar (Esc)</button>
+      <div class="fp-meta">
+        <strong id="fpTitle"></strong>
+        <span id="fpStatus" class="fp-status"></span>
+      </div>
+      <button id="fpReload" class="btn-ghost btn-sm">↻ Recarregar</button>
+    </div>
+    <div class="fp-controls">
+      <button id="fpPlayPause" class="fp-btn">⏸</button>
+      <button id="fpBack10" class="fp-btn">-10s</button>
+      <button id="fpFwd10" class="fp-btn">+10s</button>
+      <span id="fpTimeCur" class="fp-time">00:00</span>
+      <input type="range" id="fpSeek" class="fp-seek" min="0" max="100" value="0" />
+      <span id="fpTimeDur" class="fp-time">00:00</span>
+      <button id="fpMute" class="fp-btn">🔊</button>
+      <input type="range" id="fpVol" class="fp-vol" min="0" max="1" step="0.05" value="1" />
+      <button id="fpFs" class="fp-btn">⛶</button>
+    </div>
+  </div>
+
+  <!-- Bibliotecas locais empacotadas no projeto -->
+  <script src="../node_modules/hls.js/dist/hls.min.js"></script>
+  <script src="../node_modules/mpegts.js/dist/mpegts.js"></script>
+  <script src="js/playerEngine.js"></script>
+  <script src="js/synopsis.js"></script>
+  <script src="js/multiview.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
