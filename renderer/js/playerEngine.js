@@ -1,5 +1,5 @@
-// Motor unificado de video do Vorvia PC v1.2.1 (HLS + MPEG-TS + HTML5 nativo)
-// Otimizado para streams IPTV estaveis (sem travamento a cada 3s) e ate 6 telas simultaneas.
+// Motor unificado de video do Vorvia PC v1.2.4 (HLS + MPEG-TS + HTML5 nativo)
+// Buffer equilibrado para inicio rapido de audio/video (sem atraso de ~1 min e sem travar a cada 3s).
 
 window.VorviaPlayerEngine = (function () {
   function getPathname(url) {
@@ -24,7 +24,6 @@ window.VorviaPlayerEngine = (function () {
     if (/\.(mp4|mkv|webm|mov|m4v|avi)$/.test(pathname)) {
       return 'native';
     }
-    // Streams ao vivo Xtream/M3U sem extensao no final (ex: /live/user/pass/12345 ou /user/pass/12345)
     if (pathname.includes('/live/') || (!lastSegment.includes('.') && /^\d+$/.test(lastSegment))) {
       return 'mpegts';
     }
@@ -102,7 +101,6 @@ window.VorviaPlayerEngine = (function () {
 
     _armStallWatchdog(type) {
       clearTimeout(this.stallTimer);
-      // So reconecta se travar continuamente por mais de 14 segundos
       this.stallTimer = setTimeout(() => {
         if (this.destroyed || !this.video || this.video.paused) return;
         this._scheduleRetry(type);
@@ -146,13 +144,15 @@ window.VorviaPlayerEngine = (function () {
       if (type === 'hls' && window.Hls && window.Hls.isSupported()) {
         this.hls = new window.Hls({
           enableWorker: true,
-          lowLatencyMode: false, // Evita travar a cada 3s em servidores IPTV comuns
-          liveSyncDurationCount: 4,
-          liveMaxLatencyDurationCount: 12,
-          backBufferLength: 20,
-          maxBufferLength: 45,
-          maxMaxBufferLength: 90,
-          maxBufferHole: 1.5,
+          lowLatencyMode: false,
+          startFragPrefetch: true,
+          liveSyncDurationCount: 3,
+          liveMaxLatencyDurationCount: 8,
+          backBufferLength: 10,
+          maxBufferLength: 15,      // Reduzido de 45s para 15s: evita fila longa de audio/video
+          maxMaxBufferLength: 30,   // Reduzido de 90s para 30s: resposta rapida no Multitela
+          maxBufferHole: 1.0,
+          maxAudioFramesDrift: 4,
           nudgeOffset: 0.2,
           nudgeMaxRetry: 10,
           fragLoadingTimeOut: 20000,
@@ -198,13 +198,13 @@ window.VorviaPlayerEngine = (function () {
             { type: 'mpegts', isLive: true, url },
             {
               enableWorker: true,
-              enableStashBuffer: true, // Buffer inicial real para absorver oscilacoes do stream
-              stashInitialSize: 512,   // 512 KB de folga antes de reproduzir
+              enableStashBuffer: true,
+              stashInitialSize: 256, // 256 KB: inicio rapido de audio sem travar a cada 3s
               lazyLoad: false,
-              liveBufferLatencyChasing: false, // DESLIGADO: elimina o salto/travamento a cada 3 segundos
+              liveBufferLatencyChasing: false,
               autoCleanupSourceBuffer: true,
-              autoCleanupMaxBackwardDuration: 25,
-              autoCleanupMinBackwardDuration: 10,
+              autoCleanupMaxBackwardDuration: 15,
+              autoCleanupMinBackwardDuration: 8,
               fixAudioTimestampGap: true,
               accurateSeek: false
             }
