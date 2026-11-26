@@ -1,23 +1,85 @@
-// Modulo Multitela Pro v1.2.2 (ate 6 telas simultaneas em grade 3x2)
-// Audio estavel no Electron/Chromium: mantem o pipeline de audio vivo via volume inaudivel
-// (em vez de video.muted = true, que suspende o decoder MSE e faz o som sumir ao trocar de tela).
+// Modulo Multitela Pro v1.2.3 (ate 6 telas simultaneas em grade 3x2)
+// Mixer unico via Web Audio API (AudioContext + GainNode):
+// Todas as 6 telas compartilham 1 unica saida de audio no Windows/Electron,
+// evitando que o som trave ou suma ao adicionar um segundo canal ou trocar de janela.
 
 window.VorviaMultiview = (function () {
   const PRESETS_KEY = 'vorvia_pc_multiview_presets_v1';
   const MAX_SLOTS = 6;
-  // Volume inaudivel (-86 dB) que impede o Chromium de suspender o decoder de audio em streams MSE ao vivo
-  const SILENT_VOLUME = 0.00005;
 
-  let activeCount = 6; // Padrao ja pronto em 6 telas!
+  let activeCount = 6;
   let activeAudioSlot = 0;
   let globalMuted = false;
   let slots = [];
   let onRequestChannelPicker = null;
   let containerEl = null;
 
+  // Contexto unico de audio para todas as 6 janelas
+  let audioCtx = null;
+  let audioUnlockBound = false;
+
+  function ensureAudioContext() {
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) {
+        try {
+          audioCtx = new Ctx({ latencyHint: 'playback' });
+        } catch (_) {
+          audioCtx = null;
+        }
+      }
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+    return audioCtx;
+  }
+
+  function bindGlobalAudioUnlock() {
+    if (audioUnlockBound) return;
+    audioUnlockBound = true;
+    const unlock = () => {
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+    };
+    document.addEventListener('pointerdown', unlock, { passive: true });
+    document.addEventListener('keydown', unlock, { passive: true });
+  }
+
+  function attachSlotAudioGraph(slot) {
+    if (!slot || !slot.videoEl || slot.audioAttached) return;
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+
+    try {
+      const source = ctx.createMediaElementSource(slot.videoEl);
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = 0;
+      source.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      slot.audioSource = source;
+      slot.gainNode = gainNode;
+      slot.audioAttached = true;
+    } catch (_) {
+      // Fallback para controle direto no elemento <video> caso Web Audio falhe
+      slot.audioAttached = false;
+    }
+  }
+
   function init(container, pickerCallback) {
     containerEl = container;
     onRequestChannelPicker = pickerCallback;
+    bindGlobalAudioUnlock();
+
+    // Marca visual da versao para confirmar que o build atualizado esta ativo
+    const mvHeading = document.querySelector('#view-multiview .mv-toolbar h2');
+    if (mvHeading && !mvHeading.dataset.verTagged) {
+      mvHeading.dataset.verTagged = '1';
+      mvHeading.innerHTML = 'Multitela <span class="accent">Pro</span> <small style="font-size:11px;color:#8E9CB8;font-weight:600">v1.2.3</small>';
+    }
+
     for (let i = 0; i < MAX_SLOTS; i++) {
       slots.push({
         index: i,
@@ -26,7 +88,10 @@ window.VorviaMultiview = (function () {
         videoEl: null,
         statusEl: null,
         titleEl: null,
-        volume: 0.85
+        volume: 0.85,
+        audioAttached: false,
+        audioSource: null,
+        gainNode: null
       });
     }
     renderGrid();
@@ -35,7 +100,6 @@ window.VorviaMultiview = (function () {
 
   function setLayout(count) {
     activeCount = Math.min(MAX_SLOTS, Math.max(1, Number(count) || 6));
-    // Para streams de slots ocultos para economizar banda e GPU
     for (let i = activeCount; i < MAX_SLOTS; i++) {
       if (slots[i].engine) slots[i].engine.stop();
     }
@@ -48,15 +112,28 @@ window.VorviaMultiview = (function () {
     const slot = slots[idx];
     if (!slot || !slot.videoEl) return;
 
-    const isFocused = !globalMuted && idx === activeAudioSlot;
-    const targetVol = isFocused ? Math.max(0.05, Math.min(1, Number(slot.volume) || 0.85)) : SILENT_VOLUME;
+    const isFocused = !globalMuted && idx === activeAudioSlot && idx < activeCount;
+    const targetVol = isFocused ? Math.max(0.05, Math.min(1, Number(slot.volume) || 0.85)) : 0;
 
-    // Nunca usa muted = true para evitar o bug do Chromium que derruba o audio MSE ao alternar telas
+    // Mantem o elemento <video> sempre desmutado para o Chromium nunca suspender o decoder MSE
     slot.videoEl.defaultMuted = false;
     slot.videoEl.muted = false;
-    try {
-      slot.videoEl.volume = targetVol;
-    } catch (_) {}
+
+    if (slot.audioAttached && slot.gainNode && audioCtx) {
+      slot.videoEl.volume = 1;
+      try {
+        const now = audioCtx.currentTime;
+        slot.gainNode.gain.cancelScheduledValues(now);
+        slot.gainNode.gain.setTargetAtTime(targetVol, now, 0.015);
+      } catch (_) {
+        slot.gainNode.gain.value = targetVol;
+      }
+    } else {
+      // Fallback caso o AudioContext ainda nao esteja inicializado
+      try {
+        slot.videoEl.volume = isFocused ? targetVol : 0.00005;
+      } catch (_) {}
+    }
 
     const cell = containerEl?.querySelector(`.mv-cell[data-slot="${idx}"]`);
     if (cell) {
@@ -71,7 +148,6 @@ window.VorviaMultiview = (function () {
     containerEl.className = `mv-grid mv-layout-${activeCount}`;
     containerEl.innerHTML = '';
 
-    // Atualiza botoes de layout
     document.querySelectorAll('.mv-layout-btn').forEach((btn) => {
       btn.classList.toggle('active', Number(btn.dataset.count) === activeCount);
     });
@@ -115,41 +191,59 @@ window.VorviaMultiview = (function () {
       const statusEl = cell.querySelector('.mv-status');
       const titleEl = cell.querySelector('.mv-ch-title');
 
+      // Desconecta grafo anterior ao recriar o elemento <video>
+      if (slot.audioSource) {
+        try { slot.audioSource.disconnect(); } catch (_) {}
+      }
+      if (slot.gainNode) {
+        try { slot.gainNode.disconnect(); } catch (_) {}
+      }
+      slot.audioAttached = false;
+      slot.audioSource = null;
+      slot.gainNode = null;
+
       videoEl.defaultMuted = false;
       videoEl.muted = false;
-      videoEl.volume = isFocused ? slot.volume : SILENT_VOLUME;
-
-      // Reaplica o nivel de audio sempre que o stream iniciar ou reconectar
-      const enforceAudio = () => applySlotAudio(i);
-      videoEl.addEventListener('loadedmetadata', enforceAudio);
-      videoEl.addEventListener('canplay', enforceAudio);
-      videoEl.addEventListener('playing', enforceAudio);
+      videoEl.volume = 1;
 
       slot.videoEl = videoEl;
       slot.statusEl = statusEl;
       slot.titleEl = titleEl;
 
-      // Recria engine limpa vinculada ao novo elemento <video>
+      // Conecta esta tela ao mixer unico do AudioContext
+      attachSlotAudioGraph(slot);
+
+      const enforceAudio = () => {
+        ensureAudioContext();
+        attachSlotAudioGraph(slot);
+        applySlotAudio(i);
+      };
+      videoEl.addEventListener('loadedmetadata', enforceAudio);
+      videoEl.addEventListener('canplay', enforceAudio);
+      videoEl.addEventListener('playing', enforceAudio);
+
       if (slot.engine) slot.engine.destroy();
       slot.engine = window.VorviaPlayerEngine.create(videoEl, {
         onStatus: (state, msg) => {
           statusEl.textContent = msg;
           statusEl.className = `mv-status st-${state}`;
-          if (state === 'playing') applySlotAudio(i);
+          if (state === 'playing') enforceAudio();
         }
       });
 
-      // Eventos
       cell.querySelector('.mv-pick-btn').onclick = (e) => {
         e.stopPropagation();
+        ensureAudioContext();
         if (onRequestChannelPicker) onRequestChannelPicker(i);
       };
       cell.querySelector('.mv-change-btn').onclick = (e) => {
         e.stopPropagation();
+        ensureAudioContext();
         if (onRequestChannelPicker) onRequestChannelPicker(i);
       };
       cell.querySelector('.mv-audio-btn').onclick = (e) => {
         e.stopPropagation();
+        ensureAudioContext();
         if (i === activeAudioSlot && !globalMuted) {
           globalMuted = true;
           syncAudioFocus();
@@ -162,6 +256,7 @@ window.VorviaMultiview = (function () {
       volSlider.onclick = (e) => e.stopPropagation();
       volSlider.oninput = (e) => {
         e.stopPropagation();
+        ensureAudioContext();
         slot.volume = Math.max(0.05, Number(e.target.value));
         activeAudioSlot = i;
         globalMuted = false;
@@ -170,6 +265,7 @@ window.VorviaMultiview = (function () {
 
       cell.querySelector('.mv-reload-btn').onclick = (e) => {
         e.stopPropagation();
+        ensureAudioContext();
         slot.engine?.reload();
       };
       cell.querySelector('.mv-fs-btn').onclick = (e) => {
@@ -182,8 +278,8 @@ window.VorviaMultiview = (function () {
         clearSlot(i);
       };
 
-      // Clique no video foca o audio automaticamente; duplo clique abre tela cheia
       cell.onclick = () => {
+        ensureAudioContext();
         if (slot.channel) focusAudio(i);
         else if (onRequestChannelPicker) onRequestChannelPicker(i);
       };
@@ -195,7 +291,6 @@ window.VorviaMultiview = (function () {
 
       containerEl.appendChild(cell);
 
-      // Retoma canal se ja havia um carregado no slot
       if (slot.channel) {
         slot.engine.play(slot.channel.url, 0, null, slot.channel.tsUrl || '');
       }
@@ -206,10 +301,12 @@ window.VorviaMultiview = (function () {
 
   function assignChannel(slotIndex, channel) {
     if (slotIndex < 0 || slotIndex >= MAX_SLOTS || !channel) return;
+    ensureAudioContext();
     const slot = slots[slotIndex];
     slot.channel = channel;
 
-    // Se a tela que estava com foco de audio estava vazia, passa o audio para este canal automaticamente
+    attachSlotAudioGraph(slot);
+
     if (!slots[activeAudioSlot] || !slots[activeAudioSlot].channel) {
       activeAudioSlot = slotIndex;
       globalMuted = false;
@@ -236,7 +333,6 @@ window.VorviaMultiview = (function () {
       cell.querySelector('.mv-ch-title').textContent = 'Vazio';
       cell.querySelector('.mv-status').textContent = '';
     }
-    // Se fechou a tela que estava com o som ativo, transfere para outra tela que tenha canal tocando
     if (slotIndex === activeAudioSlot) {
       const next = slots.findIndex((s, idx) => idx < activeCount && s.channel);
       if (next !== -1) activeAudioSlot = next;
@@ -252,7 +348,6 @@ window.VorviaMultiview = (function () {
     slots.forEach((s) => s.videoEl && s.videoEl.pause());
   }
 
-  // Fecha as conexoes de rede das telas sem apagar os canais escolhidos (evita derrubar contas de 1 tela)
   function suspendAll() {
     slots.forEach((s) => {
       if (s.engine) s.engine.stop();
@@ -260,6 +355,7 @@ window.VorviaMultiview = (function () {
   }
 
   function resumeAll() {
+    ensureAudioContext();
     slots.forEach((s, idx) => {
       if (idx < activeCount && s.channel && s.engine) {
         if (!s.engine.hls && !s.engine.tsPlayer && (!s.videoEl || !s.videoEl.src)) {
@@ -279,10 +375,12 @@ window.VorviaMultiview = (function () {
 
   function focusAudio(slotIndex) {
     if (slotIndex < 0 || slotIndex >= activeCount) return;
+    ensureAudioContext();
     activeAudioSlot = slotIndex;
     globalMuted = false;
     const target = slots[slotIndex];
     if (target && target.volume < 0.1) target.volume = 0.85;
+    if (target) attachSlotAudioGraph(target);
     syncAudioFocus();
     if (target?.videoEl && target.channel && target.videoEl.paused) {
       target.videoEl.play().catch(() => {});
@@ -291,6 +389,7 @@ window.VorviaMultiview = (function () {
 
   function syncAudioFocus() {
     if (!containerEl) return;
+    ensureAudioContext();
     for (let i = 0; i < MAX_SLOTS; i++) {
       applySlotAudio(i);
     }
@@ -313,6 +412,7 @@ window.VorviaMultiview = (function () {
   }
 
   function applyPreset(presetId) {
+    ensureAudioContext();
     const preset = loadPresets().find((p) => p.id === presetId);
     if (!preset) return;
     setLayout(preset.count || 6);
