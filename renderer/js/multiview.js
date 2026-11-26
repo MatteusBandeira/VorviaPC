@@ -148,7 +148,7 @@ window.VorviaMultiview = (function () {
 
       // Retoma canal se ja havia um carregado no slot
       if (slot.channel) {
-        slot.engine.play(slot.channel.url);
+        slot.engine.play(slot.channel.url, 0, null, slot.channel.tsUrl || '');
       }
     }
 
@@ -166,7 +166,7 @@ window.VorviaMultiview = (function () {
       cell.querySelector('.mv-ch-title').textContent = channel.name;
     }
 
-    slot.engine?.play(channel.url);
+    slot.engine?.play(channel.url, 0, null, channel.tsUrl || '');
     syncAudioFocus();
   }
 
@@ -191,9 +191,22 @@ window.VorviaMultiview = (function () {
     slots.forEach((s) => s.videoEl && s.videoEl.pause());
   }
 
+  // Fecha as conexoes de rede das telas sem apagar os canais escolhidos (evita derrubar contas de 1 tela)
+  function suspendAll() {
+    slots.forEach((s) => {
+      if (s.engine) s.engine.stop();
+    });
+  }
+
   function resumeAll() {
     slots.forEach((s, idx) => {
-      if (idx < activeCount && s.channel && s.videoEl) s.videoEl.play().catch(() => {});
+      if (idx < activeCount && s.channel && s.engine) {
+        if (!s.engine.hls && !s.engine.tsPlayer && (!s.videoEl || !s.videoEl.src)) {
+          s.engine.play(s.channel.url, 0, null, s.channel.tsUrl || '');
+        } else if (s.videoEl && s.videoEl.paused) {
+          s.videoEl.play().catch(() => {});
+        }
+      }
     });
   }
 
@@ -293,6 +306,7 @@ window.VorviaMultiview = (function () {
     clearSlot,
     clearAll,
     pauseAll,
+    suspendAll,
     resumeAll,
     muteAll,
     focusAudio,

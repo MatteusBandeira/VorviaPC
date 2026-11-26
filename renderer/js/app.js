@@ -123,7 +123,7 @@
         if (state.settings.pauseOnMinimize) {
           $('mainVideo').pause();
           $('livePreviewVideo').pause();
-          window.VorviaMultiview.pauseAll();
+          window.VorviaMultiview.suspendAll();
         } else if (state.settings.muteOnMinimize) {
           $('mainVideo').muted = true;
           $('livePreviewVideo').muted = true;
@@ -203,16 +203,44 @@
     renderSavedProfiles();
   }
 
+  function extractXtreamFromM3UUrl(m3uUrl) {
+    try {
+      const u = new URL(m3uUrl);
+      const user = u.searchParams.get('username');
+      const pass = u.searchParams.get('password');
+      if (user && pass && /get\.php/i.test(u.pathname)) {
+        return { server: `${u.protocol}//${u.host}`, user, pass };
+      }
+    } catch (_) {}
+    return null;
+  }
+
   async function connectProfile(profile, shouldSave) {
     const status = $('loginStatus');
     status.textContent = 'Conectando ao servidor e carregando catálogo...';
     try {
-      if (profile.type === 'xtream') {
-        await loadXtreamCatalog(profile);
+      let activeProfile = { ...profile };
+      if (activeProfile.type === 'xtream') {
+        await loadXtreamCatalog(activeProfile);
       } else {
-        await loadM3UCatalog(profile);
+        // Se a URL M3U for de servidor Xtream (get.php?username=...&password=...), tenta API Xtream primeiro
+        const detectedXt = extractXtreamFromM3UUrl(activeProfile.url);
+        let loadedViaXtream = false;
+        if (detectedXt) {
+          try {
+            const xtProfile = { ...activeProfile, ...detectedXt, type: 'xtream' };
+            await loadXtreamCatalog(xtProfile);
+            activeProfile = xtProfile;
+            loadedViaXtream = true;
+          } catch (_) {
+            loadedViaXtream = false;
+          }
+        }
+        if (!loadedViaXtream) {
+          await loadM3UCatalog(activeProfile);
+        }
       }
-      state.profile = profile;
+      state.profile = activeProfile;
       if (shouldSave) saveProfile(profile);
 
       $('activeProfileBadge').textContent = profile.name;
@@ -295,6 +323,72 @@
     $('accountSummary').textContent = `Perfil: ${profile.name} • Validade: ${exp} • GPU acelerada para 6 telas`;
   }
 
+  function parseSeriesEpisodeInfo(rawName, groupName, url) {
+    const name = String(rawName || '').trim();
+    const isSeriesUrl = /\/series\//i.test(url || '');
+    const isSeriesGroup = /\b(s[eé]ries?|novelas?|animes?|doramas?|desenhos?)\b/i.test(groupName || '');
+
+    // Padrao 1: "Os Gatões - S07E17 - Episódio 17" / "Serie S01 E02" / "Serie T01E05"
+    let m = name.match(/^(.*?)(?:\s*[-–|:]\s*|\s+)[ST](\d{1,2})\s*E(\d{1,3})\b(?:\s*[-–|:]\s*(.*))?$/i);
+    if (m) {
+      const baseName = m[1].replace(/[\s\-–|:]+$/, '').trim() || name;
+      return {
+        seriesName: baseName,
+        season: String(parseInt(m[2], 10)),
+        episode: parseInt(m[3], 10),
+        epTitle: (m[4] || '').trim() || `Episódio ${parseInt(m[3], 10)}`
+      };
+    }
+
+    // Padrao 2: "Serie 1x05 - Titulo" (exige 2 digitos no episodio ou grupo/url de serie para nao confundir com filmes como "4x4")
+    m = name.match(/^(.*?)(?:\s*[-–|:]\s*|\s+)(\d{1,2})x(\d{2,3})\b(?:\s*[-–|:]\s*(.*))?$/i);
+    if (m) {
+      const baseName = m[1].replace(/[\s\-–|:]+$/, '').trim() || name;
+      return {
+        seriesName: baseName,
+        season: String(parseInt(m[2], 10)),
+        episode: parseInt(m[3], 10),
+        epTitle: (m[4] || '').trim() || `Episódio ${parseInt(m[3], 10)}`
+      };
+    }
+
+    // Padrao 2b: "Serie - Temporada 1 Episodio 5"
+    m = name.match(/^(.*?)(?:\s*[-–|:]\s*|\s+)(?:temporada|season|temp\.?)\s*(\d{1,2})\s*[-–|:]?\s*(?:epis[oó]dio|ep\.?)\s*(\d{1,3})\b(?:\s*[-–|:]\s*(.*))?$/i);
+    if (m) {
+      const baseName = m[1].replace(/[\s\-–|:]+$/, '').trim() || name;
+      return {
+        seriesName: baseName,
+        season: String(parseInt(m[2], 10)),
+        episode: parseInt(m[3], 10),
+        epTitle: (m[4] || '').trim() || `Episódio ${parseInt(m[3], 10)}`
+      };
+    }
+
+    // Padrao 3: URL /series/ ou grupo de series com "EP 01" / "Episodio 12"
+    if (isSeriesUrl || isSeriesGroup) {
+      m = name.match(/^(.*?)(?:\s*[-–|:]\s*|\s+)(?:ep\.?|epis[oó]dio)\s*(\d{1,4})\b(?:\s*[-–|:]\s*(.*))?$/i);
+      if (m) {
+        const baseName = m[1].replace(/[\s\-–|:]+$/, '').trim() || name;
+        return {
+          seriesName: baseName,
+          season: '1',
+          episode: parseInt(m[2], 10),
+          epTitle: (m[3] || '').trim() || `Episódio ${parseInt(m[2], 10)}`
+        };
+      }
+      if (isSeriesUrl || /\.(mp4|mkv|avi|mov|m4v)(\?|$)/i.test(url || '')) {
+        return {
+          seriesName: name,
+          season: '1',
+          episode: 1,
+          epTitle: name
+        };
+      }
+    }
+
+    return null;
+  }
+
   async function loadM3UCatalog(profile) {
     const res = await window.vorviaAPI.netFetch(profile.url, { timeout: 45000 });
     if (!res.ok) throw new Error('Não foi possível baixar a lista M3U.');
@@ -302,8 +396,10 @@
 
     const live = [];
     const movies = [];
+    const seriesMap = new Map();
     const liveCats = new Set();
     const movieCats = new Set();
+    const seriesCats = new Set();
 
     let current = null;
     for (let i = 0; i < lines.length; i++) {
@@ -314,8 +410,39 @@
         const name = line.split(',').slice(1).join(',').trim() || 'Sem título';
         current = { name, logo, group };
       } else if (line && !line.startsWith('#') && current) {
-        const isVod = /\.(mp4|mkv|avi|mov)(\?|$)/i.test(line) || /\/movie\//i.test(line);
-        if (isVod) {
+        const epInfo = parseSeriesEpisodeInfo(current.name, current.group, line);
+        const isVodFile = /\.(mp4|mkv|avi|mov|m4v)(\?|$)/i.test(line) || /\/movie\//i.test(line);
+
+        if (epInfo) {
+          // Agrupa todos os episodios da mesma serie em 1 unico card com temporadas
+          const key = epInfo.seriesName.toLowerCase();
+          seriesCats.add(current.group);
+          if (!seriesMap.has(key)) {
+            seriesMap.set(key, {
+              id: `m3u_s_${seriesMap.size}`,
+              name: epInfo.seriesName,
+              poster: current.logo,
+              rating: '',
+              plot: '',
+              added: i,
+              categoryId: current.group,
+              categoryName: current.group,
+              type: 'series',
+              m3uEpisodes: {}
+            });
+          }
+          const seriesObj = seriesMap.get(key);
+          seriesObj.added = i;
+          if (!seriesObj.poster && current.logo) seriesObj.poster = current.logo;
+          if (!seriesObj.m3uEpisodes[epInfo.season]) seriesObj.m3uEpisodes[epInfo.season] = [];
+          seriesObj.m3uEpisodes[epInfo.season].push({
+            id: `m3u_ep_${i}`,
+            episode_num: epInfo.episode,
+            title: epInfo.epTitle,
+            url: line,
+            info: {}
+          });
+        } else if (isVodFile) {
           movieCats.add(current.group);
           movies.push({
             id: `m3u_m_${movies.length}`,
@@ -325,7 +452,7 @@
             categoryName: current.group,
             url: line,
             type: 'movie',
-            added: movies.length
+            added: i
           });
         } else {
           liveCats.add(current.group);
@@ -343,12 +470,19 @@
       }
     }
 
+    const seriesList = [...seriesMap.values()];
+    seriesList.forEach((s) => {
+      Object.keys(s.m3uEpisodes).forEach((seasonKey) => {
+        s.m3uEpisodes[seasonKey].sort((a, b) => Number(a.episode_num || 0) - Number(b.episode_num || 0));
+      });
+    });
+
     state.liveCategories = [...liveCats].map((g) => ({ category_id: g, category_name: g }));
     state.liveStreams = live;
     state.movieCategories = [...movieCats].map((g) => ({ category_id: g, category_name: g }));
     state.movies = movies;
-    state.seriesCategories = [];
-    state.series = [];
+    state.seriesCategories = [...seriesCats].map((g) => ({ category_id: g, category_name: g }));
+    state.series = seriesList;
     $('accountSummary').textContent = `Lista M3U: ${profile.name} • GPU acelerada para 6 telas`;
   }
 
@@ -385,6 +519,8 @@
     $(`view-${viewName}`)?.classList.add('active');
 
     if (viewName !== 'live') state.livePreviewEngine?.stop();
+    if (viewName !== 'multiview') window.VorviaMultiview.suspendAll();
+    if (viewName === 'multiview') window.VorviaMultiview.resumeAll();
     if (viewName === 'favorites') renderFavorites();
     if (viewName === 'home') renderContinueWatching();
   }
@@ -569,7 +705,7 @@
     $('livePreviewTitle').textContent = ch.name;
     $('livePreviewCat').textContent = ch.categoryName;
     $('btnLiveFav').textContent = isFavorite(ch.id, 'live') ? '★ Favoritado' : '★ Favoritar';
-    state.livePreviewEngine.play(ch.url);
+    state.livePreviewEngine.play(ch.url, 0, null, ch.tsUrl || '');
     document.querySelectorAll('#liveChannelList .ch-item').forEach((el) => {
       el.classList.toggle('active', el.textContent.trim() === ch.name);
     });
@@ -734,8 +870,9 @@
   }
 
   function renderSeriesEpisodes(seriesItem, xtreamInfo, poster) {
-    const episodesObj = xtreamInfo?.episodes || {};
-    const seasonKeys = Object.keys(episodesObj);
+    const liveSeries = state.series.find((s) => s.id === seriesItem.id) || seriesItem;
+    const episodesObj = xtreamInfo?.episodes || liveSeries.m3uEpisodes || {};
+    const seasonKeys = Object.keys(episodesObj).sort((a, b) => Number(a) - Number(b));
     if (!seasonKeys.length) return;
 
     $('seriesEpisodesWrap').classList.remove('hidden');
@@ -743,13 +880,13 @@
     select.innerHTML = seasonKeys.map((k) => `<option value="${k}">Temporada ${k}</option>`).join('');
 
     const showSeason = (seasonKey) => {
-      const eps = episodesObj[seasonKey] || [];
+      const eps = [...(episodesObj[seasonKey] || [])].sort((a, b) => Number(a.episode_num || 0) - Number(b.episode_num || 0));
       const list = $('episodesList');
       list.innerHTML = '';
       eps.forEach((ep) => {
         const epNum = ep.episode_num || '';
         const ext = ep.container_extension || 'mp4';
-        const url = `${state.profile.server}/series/${encodeURIComponent(state.profile.user)}/${encodeURIComponent(state.profile.pass)}/${ep.id}.${ext}`;
+        const url = ep.url || `${state.profile.server}/series/${encodeURIComponent(state.profile.user)}/${encodeURIComponent(state.profile.pass)}/${ep.id}.${ext}`;
         const card = document.createElement('div');
         card.className = 'ep-card';
         card.innerHTML = `
@@ -909,11 +1046,11 @@
 
   function openFullPlayer(item, startTime = 0) {
     state.currentPlayingItem = item;
-    window.VorviaMultiview.pauseAll();
+    window.VorviaMultiview.suspendAll();
     state.livePreviewEngine?.stop();
     $('fpTitle').textContent = item.name;
     $('fullPlayer').classList.remove('hidden');
-    state.mainPlayerEngine.play(item.url, startTime);
+    state.mainPlayerEngine.play(item.url, startTime, null, item.tsUrl || '');
   }
 
   function closeFullPlayer() {
